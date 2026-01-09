@@ -2,191 +2,227 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime
 
-# --- PAGE SETUP ---
-st.set_page_config(page_title="Digital Scorer's Table", page_icon="📝", layout="wide")
+# --- CONFIGURATION ---
+st.set_page_config(page_title="Court Command | Pro Scorer", page_icon="🏀", layout="wide")
 
-# --- CSS FOR REALISTIC SCOREBOARD LOOK ---
+# --- CUSTOM CSS FOR "PRO" LOOK ---
+# This CSS tightens the buttons and makes the scoreboard look like an LED display
 st.markdown("""
     <style>
-    .score-box {
-        font-size: 60px;
-        font-weight: bold;
-        text-align: center;
-        background-color: #000;
-        color: #f00; /* LED Red */
-        border-radius: 10px;
-        padding: 10px;
-        margin-bottom: 10px;
+    div.stButton > button {
+        padding: 0px 10px;
+        font-size: 12px;
+        height: 35px;
+        width: 100%;
+        border-radius: 4px;
     }
-    .stat-label {
-        font-size: 18px;
+    .player-name {
+        font-size: 16px;
+        font-weight: bold;
+        padding-top: 8px;
+    }
+    .score-display {
+        font-family: 'Courier New', monospace;
+        background-color: #000;
+        color: #0f0;
+        font-size: 40px;
         font-weight: bold;
         text-align: center;
-        color: #555;
+        padding: 10px;
+        border-radius: 5px;
+        margin-bottom: 10px;
     }
     </style>
 """, unsafe_allow_html=True)
 
 # --- INITIALIZATION ---
-# Initialize all session state variables if they don't exist
-default_values = {
-    'home_score': 0, 'away_score': 0,
-    'home_fouls': 0, 'away_fouls': 0,
-    'home_timeouts': 0, 'away_timeouts': 0,
-    'period': 1,
-    'possession': 'HOME',
-    'game_log': []  # This will hold the official running scoresheet
+if 'game_started' not in st.session_state:
+    st.session_state.game_started = False
+if 'game_log' not in st.session_state:
+    st.session_state.game_log = []
+if 'teams' not in st.session_state:
+    st.session_state.teams = {"Home": "Warriors", "Away": "Lakers"}
+if 'roster' not in st.session_state:
+    # Structure: {'Home': [{'name': 'Curry', 'stats': {...}}, ...], 'Away': ...}
+    st.session_state.roster = {"Home": [], "Away": []}
+
+# --- STATS ENGINE ---
+STATS_TEMPLATE = {
+    "PTS": 0, "FG": 0, "3PT": 0, "FT": 0,
+    "REB": 0, "AST": 0, "STL": 0, "BLK": 0, 
+    "TO": 0, "PF": 0
 }
 
-for key, val in default_values.items():
-    if key not in st.session_state:
-        st.session_state[key] = val
-
-# --- HELPER FUNCTIONS ---
-def add_event(team, player_num, event_type, points=0):
-    # Update Scores
-    if team == "HOME":
-        st.session_state.home_score += points
+def update_stat(team, player_idx, stat_type, points=0):
+    # 1. Update Player Stats
+    player = st.session_state.roster[team][player_idx]
+    
+    if stat_type in ["FG", "3PT", "FT"]:
+        player['stats'][stat_type] += 1
+        player['stats']['PTS'] += points
     else:
-        st.session_state.away_score += points
-    
-    # Create Log Entry
+        player['stats'][stat_type] += 1
+        
+    # 2. Log Event
     timestamp = datetime.now().strftime("%H:%M:%S")
+    event_desc = f"{stat_type} ({points}pts)" if points > 0 else stat_type
+    
     log_entry = {
-        "Period": st.session_state.period,
         "Time": timestamp,
-        "Team": team,
-        "Player #": player_num if player_num else "TEAM",
-        "Event": event_type,
-        "Running Score": f"{st.session_state.home_score} - {st.session_state.away_score}"
+        "Team": st.session_state.teams[team],
+        "Player": player['name'],
+        "Event": event_desc,
+        "Score": get_score_string()
     }
-    st.session_state.game_log.insert(0, log_entry) # Add to top of list
+    st.session_state.game_log.insert(0, log_entry)
+    st.toast(f"{player['name']} - {event_desc}")
 
-def reset_fouls():
-    st.session_state.home_fouls = 0
-    st.session_state.away_fouls = 0
-    st.toast("Team fouls reset for new quarter!")
+def get_team_score(team_key):
+    total = 0
+    for p in st.session_state.roster[team_key]:
+        total += p['stats']['PTS']
+    return total
 
-# --- SIDEBAR: GAME SETUP ---
-with st.sidebar:
-    st.header("⚙️ Game Setup")
-    home_name = st.text_input("Home Team", "Home")
-    away_name = st.text_input("Away Team", "Away")
-    
-    st.divider()
-    
-    st.subheader("Game Admin")
-    if st.button("End Period / Quarter"):
-        st.session_state.period += 1
-        reset_fouls() # Typically fouls reset every quarter (FIBA/NBA)
-    
-    if st.button("Switch Possession Arrow"):
-        st.session_state.possession = "AWAY" if st.session_state.possession == "HOME" else "HOME"
+def get_score_string():
+    h = get_team_score("Home")
+    a = get_team_score("Away")
+    return f"{h} - {a}"
 
-    if st.button("RESET GAME", type="primary"):
-        for key in st.session_state.keys():
-            del st.session_state[key]
+# --- PAGE 1: SETUP ---
+def render_setup():
+    st.title("📋 Game Setup")
+    
+    c1, c2 = st.columns(2)
+    with c1:
+        st.subheader("Home Team")
+        home_name = st.text_input("Home Team Name", "Home Team")
+        # Text area for bulk entry
+        home_roster_input = st.text_area("Home Roster (One name per line)", "Player 1\nPlayer 2\nPlayer 3\nPlayer 4\nPlayer 5")
+    
+    with c2:
+        st.subheader("Away Team")
+        away_name = st.text_input("Away Team Name", "Away Team")
+        away_roster_input = st.text_area("Away Roster (One name per line)", "Opponent A\nOpponent B\nOpponent C\nOpponent D\nOpponent E")
+
+    if st.button("🚀 Lock In Rosters & Start Game", type="primary"):
+        # Process Rosters
+        st.session_state.teams["Home"] = home_name
+        st.session_state.teams["Away"] = away_name
+        
+        # Parse text area into list
+        h_list = [x.strip() for x in home_roster_input.split('\n') if x.strip()]
+        a_list = [x.strip() for x in away_roster_input.split('\n') if x.strip()]
+        
+        # Initialize Player Objects
+        st.session_state.roster["Home"] = [{'name': name, 'stats': STATS_TEMPLATE.copy()} for name in h_list]
+        st.session_state.roster["Away"] = [{'name': name, 'stats': STATS_TEMPLATE.copy()} for name in a_list]
+        
+        st.session_state.game_started = True
         st.rerun()
 
-# --- MAIN SCOREBOARD ---
-c1, c2, c3 = st.columns([2, 1, 2])
-
-with c1:
-    st.markdown(f"<h2 style='text-align:center;'>{home_name}</h2>", unsafe_allow_html=True)
-    st.markdown(f"<div class='score-box'>{st.session_state.home_score}</div>", unsafe_allow_html=True)
+# --- PAGE 2: LIVE GAME ---
+def render_game():
+    # --- SCOREBOARD HEADER ---
+    h_score = get_team_score("Home")
+    a_score = get_team_score("Away")
     
-    # Team Stats Row
-    s1, s2 = st.columns(2)
-    s1.metric("Fouls", st.session_state.home_fouls)
-    s2.metric("Timeouts", st.session_state.home_timeouts)
+    sc1, sc2, sc3 = st.columns([2,1,2])
+    with sc1:
+        st.markdown(f"<h3 style='text-align:center'>{st.session_state.teams['Home']}</h3>", unsafe_allow_html=True)
+        st.markdown(f"<div class='score-display'>{h_score}</div>", unsafe_allow_html=True)
+    with sc2:
+        st.markdown("<h4 style='text-align:center; padding-top:20px'>VS</h4>", unsafe_allow_html=True)
+    with sc3:
+        st.markdown(f"<h3 style='text-align:center'>{st.session_state.teams['Away']}</h3>", unsafe_allow_html=True)
+        st.markdown(f"<div class='score-display'>{a_score}</div>", unsafe_allow_html=True)
     
-    if st.session_state.possession == "HOME":
-        st.markdown("🚨 **POSSESSION**")
+    st.divider()
 
-with c2:
-    st.markdown(f"<div style='text-align:center; padding-top:20px; font-size: 24px;'>PERIOD</div>", unsafe_allow_html=True)
-    st.markdown(f"<div style='text-align:center; font-size: 40px; font-weight:bold;'>{st.session_state.period}</div>", unsafe_allow_html=True)
-
-with c3:
-    st.markdown(f"<h2 style='text-align:center;'>{away_name}</h2>", unsafe_allow_html=True)
-    st.markdown(f"<div class='score-box'>{st.session_state.away_score}</div>", unsafe_allow_html=True)
+    # --- MAIN CONTROLS (TABS) ---
+    tab_home, tab_away, tab_box, tab_log = st.tabs([
+        f"🏠 {st.session_state.teams['Home']} Controls", 
+        f"✈️ {st.session_state.teams['Away']} Controls", 
+        "📊 Live Box Score",
+        "📝 Play-by-Play"
+    ])
     
-    # Team Stats Row
-    s1, s2 = st.columns(2)
-    s1.metric("Fouls", st.session_state.away_fouls)
-    s2.metric("Timeouts", st.session_state.away_timeouts)
-    
-    if st.session_state.possession == "AWAY":
-        st.markdown("🚨 **POSSESSION**")
+    # HELPER TO RENDER PLAYER ROWS
+    def render_player_rows(team_key):
+        # Header Row
+        h1, h2, h3, h4, h5, h6, h7, h8, h9 = st.columns([2, 1, 1, 1, 1, 1, 1, 1, 1])
+        h1.markdown("**Player**")
+        h2.markdown("**+1**")
+        h3.markdown("**+2**")
+        h4.markdown("**+3**")
+        h5.markdown("**REB**")
+        h6.markdown("**AST**")
+        h7.markdown("**STL**")
+        h8.markdown("**BLK**")
+        h9.markdown("**PF**") # Personal Foul
+        
+        # Player Rows
+        for idx, player in enumerate(st.session_state.roster[team_key]):
+            c1, c2, c3, c4, c5, c6, c7, c8, c9 = st.columns([2, 1, 1, 1, 1, 1, 1, 1, 1])
+            
+            with c1: st.markdown(f"<div class='player-name'>{player['name']}</div>", unsafe_allow_html=True)
+            
+            # Action Buttons - using unique keys for every single button
+            uid = f"{team_key}_{idx}"
+            if c2.button("FT", key=f"{uid}_ft"): update_stat(team_key, idx, "FT", 1)
+            if c3.button("2P", key=f"{uid}_2p"): update_stat(team_key, idx, "FG", 2)
+            if c4.button("3P", key=f"{uid}_3p"): update_stat(team_key, idx, "3PT", 3)
+            if c5.button("RB", key=f"{uid}_reb"): update_stat(team_key, idx, "REB")
+            if c6.button("AS", key=f"{uid}_ast"): update_stat(team_key, idx, "AST")
+            if c7.button("ST", key=f"{uid}_stl"): update_stat(team_key, idx, "STL")
+            if c8.button("BL", key=f"{uid}_blk"): update_stat(team_key, idx, "BLK")
+            if c9.button("PF", key=f"{uid}_pf"): update_stat(team_key, idx, "PF")
+            
+            # Optional: Add TO (Turnover) in a separate line or dropdown if needed, but this covers 90%
+            
+    with tab_home:
+        render_player_rows("Home")
+        
+    with tab_away:
+        render_player_rows("Away")
 
-st.divider()
+    with tab_box:
+        st.subheader("Combined Box Score")
+        # Flatten data for DataFrame
+        box_data = []
+        for team in ["Home", "Away"]:
+            team_name = st.session_state.teams[team]
+            for p in st.session_state.roster[team]:
+                row = p['stats'].copy()
+                row['Player'] = p['name']
+                row['Team'] = team_name
+                box_data.append(row)
+        
+        if box_data:
+            df = pd.DataFrame(box_data)
+            # Reorder columns
+            cols = ['Team', 'Player', 'PTS', 'REB', 'AST', 'STL', 'BLK', 'PF', 'FG', '3PT', 'FT']
+            st.dataframe(df[cols], use_container_width=True, height=500)
+            
+            # CSV Download
+            csv = df.to_csv(index=False).encode('utf-8')
+            st.download_button("📥 Download Box Score CSV", csv, "box_score.csv", "text/csv")
+            
+    with tab_log:
+        if st.session_state.game_log:
+            st.dataframe(pd.DataFrame(st.session_state.game_log), use_container_width=True)
+        else:
+            st.info("Game hasn't started yet.")
 
-# --- INPUT CONSOLE ---
-# This is where the user enters data
-col_home, col_away = st.columns(2)
+    # Sidebar Reset
+    with st.sidebar:
+        st.warning("⚠️ Danger Zone")
+        if st.button("End Game / Reset"):
+            for key in st.session_state.keys():
+                del st.session_state[key]
+            st.rerun()
 
-# === HOME CONTROLS ===
-with col_home:
-    st.subheader(f"📝 {home_name} Entry")
-    h_player = st.text_input("Player Jersey #", key="h_player", placeholder="e.g. 23")
-    
-    r1_c1, r1_c2, r1_c3 = st.columns(3)
-    if r1_c1.button("+1 FT", key="h1"):
-        add_event(home_name, h_player, "Free Throw (1pt)", 1)
-    if r1_c2.button("+2 FG", key="h2"):
-        add_event(home_name, h_player, "Field Goal (2pt)", 2)
-    if r1_c3.button("+3 3PT", key="h3"):
-        add_event(home_name, h_player, "3-Pointer (3pt)", 3)
-    
-    r2_c1, r2_c2, r2_c3 = st.columns(3)
-    if r2_c1.button("Foul (P)", key="hf"):
-        st.session_state.home_fouls += 1
-        add_event(home_name, h_player, "Personal Foul", 0)
-    if r2_c2.button("Tech Foul", key="htf"):
-        add_event(home_name, h_player, "Technical Foul", 0)
-        # Note: Tech fouls often don't add to team foul count depending on rules, handled manually here
-    if r2_c3.button("Timeout", key="hto"):
-        st.session_state.home_timeouts += 1
-        add_event(home_name, "TEAM", "Timeout Taken", 0)
-
-# === AWAY CONTROLS ===
-with col_away:
-    st.subheader(f"📝 {away_name} Entry")
-    a_player = st.text_input("Player Jersey #", key="a_player", placeholder="e.g. 0")
-    
-    r1_c1, r1_c2, r1_c3 = st.columns(3)
-    if r1_c1.button("+1 FT", key="a1"):
-        add_event(away_name, a_player, "Free Throw (1pt)", 1)
-    if r1_c2.button("+2 FG", key="a2"):
-        add_event(away_name, a_player, "Field Goal (2pt)", 2)
-    if r1_c3.button("+3 3PT", key="a3"):
-        add_event(away_name, a_player, "3-Pointer (3pt)", 3)
-    
-    r2_c1, r2_c2, r2_c3 = st.columns(3)
-    if r2_c1.button("Foul (P)", key="af"):
-        st.session_state.away_fouls += 1
-        add_event(away_name, a_player, "Personal Foul", 0)
-    if r2_c2.button("Tech Foul", key="atf"):
-        add_event(away_name, a_player, "Technical Foul", 0)
-    if r2_c3.button("Timeout", key="ato"):
-        st.session_state.away_timeouts += 1
-        add_event(away_name, "TEAM", "Timeout Taken", 0)
-
-st.divider()
-
-# --- OFFICIAL SCORESHEET LOG ---
-st.subheader("📋 Official Game Log")
-if st.session_state.game_log:
-    df = pd.DataFrame(st.session_state.game_log)
-    st.dataframe(df, use_container_width=True)
-    
-    # Download Button for the report
-    csv = df.to_csv(index=False).encode('utf-8')
-    st.download_button(
-        label="📥 Download Scoresheet (CSV)",
-        data=csv,
-        file_name='basketball_scoresheet.csv',
-        mime='text/csv',
-    )
+# --- MAIN ROUTER ---
+if st.session_state.game_started:
+    render_game()
 else:
-    st.info("No events recorded yet. Enter a play above.")
+    render_setup()
