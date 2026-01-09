@@ -45,13 +45,13 @@ if 'game_state' not in st.session_state:
         'team_a': {'name': 'LAKERS', 'score': 0, 'fouls': 0, 'timeouts': 7},
         'team_b': {'name': 'CELTICS', 'score': 0, 'fouls': 0, 'timeouts': 7},
         'quarter': 1,
-        'time_remaining': 720, # 12 mins
+        'time_remaining': 720, # 12 mins in seconds
         'is_running': False,
         'logs': [],
-        # Roster Structure: List of dicts {'name': 'LeBron', 'num': 23, 'stats': {pts, fouls}}
+        # Roster: List of dicts
         'roster_a': [], 
         'roster_b': [],
-        # On Court: List of player INDICES from the roster list
+        # On Court: List of player INDICES
         'on_court_a': [],
         'on_court_b': []
     }
@@ -63,7 +63,7 @@ def format_clock(seconds):
 
 def record_stat(team_key, player_idx, stat_type, val):
     # Update Player Stats
-    roster_key = f'roster_{team_key[-1]}' # roster_a or roster_b
+    roster_key = f'roster_{team_key[-1]}'
     player = st.session_state.game_state[roster_key][player_idx]
     
     if stat_type == 'PTS':
@@ -86,17 +86,14 @@ def record_stat(team_key, player_idx, stat_type, val):
 
 # --- 5. MAIN INTERFACE ---
 
-# >>> SIDEBAR: SETUP & CONFIGURATION <<<
+# >>> SIDEBAR: SETUP <<<
 with st.sidebar:
     st.header("⚙️ Game Setup")
     
-    # Team Naming
     st.session_state.game_state['team_a']['name'] = st.text_input("Home Team", st.session_state.game_state['team_a']['name']).upper()
     st.session_state.game_state['team_b']['name'] = st.text_input("Away Team", st.session_state.game_state['team_b']['name']).upper()
     
     st.divider()
-    
-    # Quick Roster Builder
     st.subheader("Roster Management")
     target_team = st.radio("Select Team to Edit", ["Home", "Away"])
     
@@ -112,8 +109,7 @@ with st.sidebar:
             })
             st.success(f"Added #{p_num} {p_name}")
 
-# >>> MAIN AREA: SCOREBOARD <<<
-# Custom HTML Scoreboard
+# >>> SCOREBOARD AREA <<<
 col_sb1, col_sb2, col_sb3 = st.columns([2, 1.5, 2])
 
 with col_sb1:
@@ -130,17 +126,39 @@ with col_sb2:
         <div class="scoreboard" style="border-color: #444;">
             <div class="qtr-display">QTR {st.session_state.game_state['quarter']}</div>
             <div class="timer-display">{format_clock(st.session_state.game_state['time_remaining'])}</div>
-            <div>MATCH 001</div>
         </div>
     """, unsafe_allow_html=True)
     
-    # Timer Controls
-    c1, c2 = st.columns(2)
-    if c1.button("Start/Stop"):
-        st.session_state.game_state['is_running'] = not st.session_state.game_state['is_running']
-    if c2.button("Nxt QTR"):
-        st.session_state.game_state['quarter'] += 1
-        st.session_state.game_state['time_remaining'] = 720
+    # TIMER & TIMEOUT BUTTONS
+    c1, c2, c3 = st.columns([1, 2, 1])
+    
+    # Team A Timeout
+    with c1:
+        if st.button("T.O.\n(Home)"):
+            if st.session_state.game_state['team_a']['timeouts'] > 0:
+                st.session_state.game_state['team_a']['timeouts'] -= 1
+                st.session_state.game_state['logs'].insert(0, {"QTR": st.session_state.game_state['quarter'], "Time": format_clock(st.session_state.game_state['time_remaining']), "Team": st.session_state.game_state['team_a']['name'], "Player": "TEAM", "Event": "TIMEOUT CALLED"})
+                st.rerun()
+        st.caption(f"{st.session_state.game_state['team_a']['timeouts']} Left")
+
+    # Start/Stop Timer
+    with c2:
+        # Visual Toggle Button
+        btn_label = "⏸ PAUSE" if st.session_state.game_state['is_running'] else "▶ START"
+        type_btn = "primary" if not st.session_state.game_state['is_running'] else "secondary"
+        
+        if st.button(btn_label, type=type_btn, use_container_width=True):
+            st.session_state.game_state['is_running'] = not st.session_state.game_state['is_running']
+            st.rerun()
+
+    # Team B Timeout
+    with c3:
+        if st.button("T.O.\n(Away)"):
+             if st.session_state.game_state['team_b']['timeouts'] > 0:
+                st.session_state.game_state['team_b']['timeouts'] -= 1
+                st.session_state.game_state['logs'].insert(0, {"QTR": st.session_state.game_state['quarter'], "Time": format_clock(st.session_state.game_state['time_remaining']), "Team": st.session_state.game_state['team_b']['name'], "Player": "TEAM", "Event": "TIMEOUT CALLED"})
+                st.rerun()
+        st.caption(f"{st.session_state.game_state['team_b']['timeouts']} Left")
 
 with col_sb3:
     st.markdown(f"""
@@ -151,121 +169,124 @@ with col_sb3:
         </div>
     """, unsafe_allow_html=True)
 
+# >>> COURT ACTION AREA <<<
 st.divider()
-
-# >>> ACTIVE FLOOR CONSOLE <<<
-
-# Selector for Starters (If less than 5 selected)
 r_a = st.session_state.game_state['roster_a']
 r_b = st.session_state.game_state['roster_b']
 
 if len(r_a) < 5 or len(r_b) < 5:
     st.warning("⚠️ Please add at least 5 players to each roster in the Sidebar to unlock the court.")
 else:
-    # --- SUB MODE TOGGLE ---
-    sub_mode = st.checkbox("🔄 SUBSTITUTION MODE (Check this to swap players)")
-
+    sub_mode = st.checkbox("🔄 SUBSTITUTION MODE")
     col_court_a, col_court_b = st.columns(2)
 
-    # --- TEAM A COURT ---
+    # TEAM A ACTIONS
     with col_court_a:
-        st.subheader(f"🏀 {st.session_state.game_state['team_a']['name']} - ON COURT")
-        
-        # If starters not set, allow selection
+        st.subheader(f"🏀 {st.session_state.game_state['team_a']['name']}")
         if len(st.session_state.game_state['on_court_a']) != 5:
             st.info("Select Starting 5:")
-            # Create a list of names for multiselect
-            opts = [f"{p['name']} (#{p['num']})" for p in r_a]
-            sel = st.multiselect("Pick 5 Starters", range(len(r_a)), format_func=lambda x: f"{r_a[x]['name']} (#{r_a[x]['num']})", max_selections=5, key="start_a")
-            if len(sel) == 5:
-                if st.button("Confirm Starters A"):
-                    st.session_state.game_state['on_court_a'] = sel
-                    st.rerun()
+            sel = st.multiselect("Pick 5 Starters (Home)", range(len(r_a)), format_func=lambda x: f"{r_a[x]['name']} (#{r_a[x]['num']})", max_selections=5, key="start_a")
+            if len(sel) == 5 and st.button("Confirm Starters A"):
+                st.session_state.game_state['on_court_a'] = sel
+                st.rerun()
         else:
-            # RENDER ACTIVE PLAYERS
             for i in st.session_state.game_state['on_court_a']:
                 player = r_a[i]
-                
-                # Check substitution
                 if sub_mode:
-                    sub_col1, sub_col2 = st.columns([3, 1])
-                    sub_col1.markdown(f"**#{player['num']} {player['name']}**")
-                    if sub_col2.button("SUB OUT", key=f"sub_a_{i}"):
+                    c1, c2 = st.columns([3, 1])
+                    c1.markdown(f"**#{player['num']} {player['name']}**")
+                    if c2.button("SUB", key=f"sub_a_{i}"):
                          st.session_state.game_state['on_court_a'].remove(i)
                          st.rerun()
                 else:
-                    # SCORING CONTROLS
-                    p_c1, p_c2, p_c3, p_c4, p_c5 = st.columns([2, 1, 1, 1, 1])
-                    p_c1.markdown(f"**#{player['num']} {player['name']}**")
-                    if p_c2.button("+1", key=f"ft_a_{i}"): record_stat('team_a', i, 'PTS', 1); st.rerun()
-                    if p_c3.button("+2", key=f"fg_a_{i}"): record_stat('team_a', i, 'PTS', 2); st.rerun()
-                    if p_c4.button("+3", key=f"3p_a_{i}"): record_stat('team_a', i, 'PTS', 3); st.rerun()
-                    if p_c5.button("FL", key=f"fl_a_{i}", type="primary"): record_stat('team_a', i, 'FOUL', 0); st.rerun()
+                    c1, c2, c3, c4, c5 = st.columns([2, 1, 1, 1, 1])
+                    c1.markdown(f"**#{player['num']}**")
+                    if c2.button("+1", key=f"ft_a_{i}"): record_stat('team_a', i, 'PTS', 1); st.rerun()
+                    if c3.button("+2", key=f"fg_a_{i}"): record_stat('team_a', i, 'PTS', 2); st.rerun()
+                    if c4.button("+3", key=f"3p_a_{i}"): record_stat('team_a', i, 'PTS', 3); st.rerun()
+                    if c5.button("FL", key=f"fl_a_{i}", type="primary"): record_stat('team_a', i, 'FOUL', 0); st.rerun()
             
-            # If sub happened and we have < 5 players, show dropdown to add
             if len(st.session_state.game_state['on_court_a']) < 5:
-                 avail_indices = [x for x in range(len(r_a)) if x not in st.session_state.game_state['on_court_a']]
-                 new_p = st.selectbox("Sub In:", avail_indices, format_func=lambda x: f"{r_a[x]['name']} (#{r_a[x]['num']})", key="new_sub_a")
+                 avail = [x for x in range(len(r_a)) if x not in st.session_state.game_state['on_court_a']]
+                 new_p = st.selectbox("Sub In:", avail, format_func=lambda x: f"{r_a[x]['name']} (#{r_a[x]['num']})", key="new_sub_a")
                  if st.button("Confirm Sub A"):
                      st.session_state.game_state['on_court_a'].append(new_p)
                      st.rerun()
 
-    # --- TEAM B COURT ---
+    # TEAM B ACTIONS
     with col_court_b:
-        st.subheader(f"🏀 {st.session_state.game_state['team_b']['name']} - ON COURT")
-        
+        st.subheader(f"🏀 {st.session_state.game_state['team_b']['name']}")
         if len(st.session_state.game_state['on_court_b']) != 5:
             st.info("Select Starting 5:")
-            opts_b = [f"{p['name']} (#{p['num']})" for p in r_b]
-            sel_b = st.multiselect("Pick 5 Starters", range(len(r_b)), format_func=lambda x: f"{r_b[x]['name']} (#{r_b[x]['num']})", max_selections=5, key="start_b")
-            if len(sel_b) == 5:
-                if st.button("Confirm Starters B"):
-                    st.session_state.game_state['on_court_b'] = sel_b
-                    st.rerun()
+            sel_b = st.multiselect("Pick 5 Starters (Away)", range(len(r_b)), format_func=lambda x: f"{r_b[x]['name']} (#{r_b[x]['num']})", max_selections=5, key="start_b")
+            if len(sel_b) == 5 and st.button("Confirm Starters B"):
+                st.session_state.game_state['on_court_b'] = sel_b
+                st.rerun()
         else:
             for i in st.session_state.game_state['on_court_b']:
                 player = r_b[i]
-                
                 if sub_mode:
-                    sub_col1, sub_col2 = st.columns([3, 1])
-                    sub_col1.markdown(f"**#{player['num']} {player['name']}**")
-                    if sub_col2.button("SUB OUT", key=f"sub_b_{i}"):
+                    c1, c2 = st.columns([3, 1])
+                    c1.markdown(f"**#{player['num']} {player['name']}**")
+                    if c2.button("SUB", key=f"sub_b_{i}"):
                          st.session_state.game_state['on_court_b'].remove(i)
                          st.rerun()
                 else:
-                    p_c1, p_c2, p_c3, p_c4, p_c5 = st.columns([2, 1, 1, 1, 1])
-                    p_c1.markdown(f"**#{player['num']} {player['name']}**")
-                    if p_c2.button("+1", key=f"ft_b_{i}"): record_stat('team_b', i, 'PTS', 1); st.rerun()
-                    if p_c3.button("+2", key=f"fg_b_{i}"): record_stat('team_b', i, 'PTS', 2); st.rerun()
-                    if p_c4.button("+3", key=f"3p_b_{i}"): record_stat('team_b', i, 'PTS', 3); st.rerun()
-                    if p_c5.button("FL", key=f"fl_b_{i}", type="primary"): record_stat('team_b', i, 'FOUL', 0); st.rerun()
+                    c1, c2, c3, c4, c5 = st.columns([2, 1, 1, 1, 1])
+                    c1.markdown(f"**#{player['num']}**")
+                    if c2.button("+1", key=f"ft_b_{i}"): record_stat('team_b', i, 'PTS', 1); st.rerun()
+                    if c3.button("+2", key=f"fg_b_{i}"): record_stat('team_b', i, 'PTS', 2); st.rerun()
+                    if c4.button("+3", key=f"3p_b_{i}"): record_stat('team_b', i, 'PTS', 3); st.rerun()
+                    if c5.button("FL", key=f"fl_b_{i}", type="primary"): record_stat('team_b', i, 'FOUL', 0); st.rerun()
             
             if len(st.session_state.game_state['on_court_b']) < 5:
-                 avail_indices_b = [x for x in range(len(r_b)) if x not in st.session_state.game_state['on_court_b']]
-                 new_p_b = st.selectbox("Sub In:", avail_indices_b, format_func=lambda x: f"{r_b[x]['name']} (#{r_b[x]['num']})", key="new_sub_b")
+                 avail_b = [x for x in range(len(r_b)) if x not in st.session_state.game_state['on_court_b']]
+                 new_p_b = st.selectbox("Sub In:", avail_b, format_func=lambda x: f"{r_b[x]['name']} (#{r_b[x]['num']})", key="new_sub_b")
                  if st.button("Confirm Sub B"):
                      st.session_state.game_state['on_court_b'].append(new_p_b)
                      st.rerun()
 
+# >>> REPORTS AREA <<<
 st.divider()
+st.header("📊 Official Game Reports")
+tab_box, tab_qtr, tab_log = st.tabs(["Box Score (Overall)", "Quarter Analysis", "Full Event Log"])
 
-# >>> LIVE PLAY-BY-PLAY FEED <<<
-st.subheader("📜 Live Play-by-Play")
-if st.session_state.game_state['logs']:
-    df_logs = pd.DataFrame(st.session_state.game_state['logs'])
-    st.dataframe(df_logs, use_container_width=True, hide_index=True)
-else:
-    st.caption("Waiting for tip-off...")
+with tab_box:
+    def build_stats(roster, team_name):
+        data = []
+        for p in roster:
+            if p['stats']['pts'] > 0 or p['stats']['fouls'] > 0:
+                data.append({'Team': team_name, 'Player': f"#{p['num']} {p['name']}", 'PTS': p['stats']['pts'], 'PF': p['stats']['fouls']})
+        return pd.DataFrame(data)
 
-# --- 6. REPORT GENERATION ---
-with st.expander("📊 Generate Official Box Score"):
-    if st.button("Generate Report"):
-        # Combine rosters and stats
-        report_data = []
-        for p in st.session_state.game_state['roster_a']:
-            report_data.append({'Team': st.session_state.game_state['team_a']['name'], 'Name': p['name'], 'PTS': p['stats']['pts'], 'PF': p['stats']['fouls']})
-        for p in st.session_state.game_state['roster_b']:
-            report_data.append({'Team': st.session_state.game_state['team_b']['name'], 'Name': p['name'], 'PTS': p['stats']['pts'], 'PF': p['stats']['fouls']})
-            
-        df_rep = pd.DataFrame(report_data)
-        st.table(df_rep)
+    df_a = build_stats(r_a, st.session_state.game_state['team_a']['name'])
+    df_b = build_stats(r_b, st.session_state.game_state['team_b']['name'])
+    if not df_a.empty or not df_b.empty:
+        st.dataframe(pd.concat([df_a, df_b], ignore_index=True), use_container_width=True)
+    else:
+        st.info("No stats yet.")
+
+with tab_qtr:
+    if st.session_state.game_state['logs']:
+        df_log = pd.DataFrame(st.session_state.game_state['logs'])
+        df_scores = df_log[df_log['Event'].str.contains("PTS", na=False)].copy()
+        if not df_scores.empty:
+            df_scores['Points'] = df_scores['Event'].str.extract(r'(\d+)').astype(int)
+            qtr_report = df_scores.pivot_table(index='Team', columns='QTR', values='Points', aggfunc='sum', fill_value=0)
+            st.table(qtr_report)
+        else:
+            st.write("No scoring events.")
+
+with tab_log:
+    if st.session_state.game_state['logs']:
+        st.dataframe(pd.DataFrame(st.session_state.game_state['logs']), use_container_width=True)
+
+# --- 6. AUTO-TIMER LOGIC (MUST BE AT END) ---
+if st.session_state.game_state['is_running']:
+    time.sleep(1) # Wait 1 second
+    if st.session_state.game_state['time_remaining'] > 0:
+        st.session_state.game_state['time_remaining'] -= 1
+        st.rerun() # Refresh screen
+    else:
+        st.session_state.game_state['is_running'] = False # Stop at 0
+        st.rerun()
