@@ -1,234 +1,271 @@
 import streamlit as st
 import pandas as pd
-import time
 from datetime import datetime
+import time
 
-# --- 1. PRO CONFIGURATION & STYLING ---
-st.set_page_config(page_title="FIBA Digital Scorer", layout="wide", page_icon="🏀")
+# --- 1. PAGE CONFIGURATION (NBA STYLE) ---
+st.set_page_config(
+    page_title="COURTSIDE PRO | Official Scorer",
+    page_icon="🏀",
+    layout="wide",
+    initial_sidebar_state="collapsed"
+)
 
-# Custom CSS for that "NBA/FIBA" Dark Dashboard Look
+# --- 2. CUSTOM CSS FOR PROFESSIONAL LOOK ---
 st.markdown("""
-<style>
-    /* Main Background */
-    .stApp {
+    <style>
+    /* Digital Scoreboard Style */
+    .scoreboard {
         background-color: #1e1e1e;
-        color: #ffffff;
-    }
-    
-    /* Scoreboard Header */
-    .scoreboard-container {
-        background-color: #000000;
-        border: 2px solid #333;
-        border-radius: 10px;
-        padding: 20px;
-        text-align: center;
-        margin-bottom: 20px;
-        box-shadow: 0px 4px 15px rgba(0,0,0,0.5);
-    }
-    .score-text {
-        font-size: 80px; 
-        font-weight: bold; 
-        color: #fca311; /* Jersey Orange */
-    }
-    .team-text {
-        font-size: 30px; 
-        font-weight: bold; 
-        color: #e5e5e5;
-        text-transform: uppercase;
-    }
-    .timer-text {
-        font-size: 60px;
-        font-family: 'Courier New', Courier, monospace;
         color: #ff3b30; /* LED Red */
-        font-weight: bold;
+        font-family: 'Courier New', Courier, monospace;
+        padding: 20px;
+        border-radius: 10px;
+        text-align: center;
+        border: 2px solid #333;
+        margin-bottom: 20px;
     }
+    .score-big { font-size: 80px; font-weight: bold; color: #fff; }
+    .team-name { font-size: 24px; color: #888; text-transform: uppercase; letter-spacing: 2px; }
+    .timer-display { font-size: 60px; font-weight: bold; color: #ffcc00; }
+    .qtr-display { font-size: 20px; color: #aaa; }
     
     /* Action Buttons */
     .stButton>button {
         width: 100%;
         border-radius: 5px;
         font-weight: bold;
-        height: 60px;
     }
-</style>
+    </style>
 """, unsafe_allow_html=True)
 
-# --- 2. SESSION STATE MANAGEMENT ---
-if 'match_data' not in st.session_state:
-    st.session_state.match_data = {
-        'team_a_name': "HOME",
-        'team_b_name': "AWAY",
-        'team_a_roster': [], # List of dicts
-        'team_b_roster': [],
-        'match_log': [],
-        'score_a': 0,
-        'score_b': 0,
+# --- 3. SESSION STATE INITIALIZATION ---
+if 'game_state' not in st.session_state:
+    st.session_state.game_state = {
+        'team_a': {'name': 'LAKERS', 'score': 0, 'fouls': 0, 'timeouts': 7},
+        'team_b': {'name': 'CELTICS', 'score': 0, 'fouls': 0, 'timeouts': 7},
+        'quarter': 1,
+        'time_remaining': 720, # 12 mins
+        'is_running': False,
+        'logs': [],
+        # Roster Structure: List of dicts {'name': 'LeBron', 'num': 23, 'stats': {pts, fouls}}
+        'roster_a': [], 
+        'roster_b': [],
+        # On Court: List of player INDICES from the roster list
+        'on_court_a': [],
+        'on_court_b': []
     }
 
-if 'timer' not in st.session_state:
-    st.session_state.timer = {'running': False, 'time_left': 600} # 10 mins FIBA standard
+# --- 4. HELPER FUNCTIONS ---
+def format_clock(seconds):
+    m, s = divmod(seconds, 60)
+    return f"{m:02d}:{s:02d}"
 
-# --- 3. HELPER FUNCTIONS ---
-def format_time(seconds):
-    mins, secs = divmod(seconds, 60)
-    return f"{mins:02d}:{secs:02d}"
-
-def log_event(quarter, team, player, event_type, points):
-    # Log the data
-    st.session_state.match_data['match_log'].append({
-        'Quarter': quarter,
-        'Time': format_time(st.session_state.timer['time_left']),
-        'Team': team,
-        'Player': player,
-        'Event': event_type,
-        'Points': points
+def record_stat(team_key, player_idx, stat_type, val):
+    # Update Player Stats
+    roster_key = f'roster_{team_key[-1]}' # roster_a or roster_b
+    player = st.session_state.game_state[roster_key][player_idx]
+    
+    if stat_type == 'PTS':
+        player['stats']['pts'] += val
+        st.session_state.game_state[team_key]['score'] += val
+        evt_desc = f"+{val} PTS"
+    elif stat_type == 'FOUL':
+        player['stats']['fouls'] += 1
+        st.session_state.game_state[team_key]['fouls'] += 1
+        evt_desc = "PERSONAL FOUL"
+    
+    # Log Event
+    st.session_state.game_state['logs'].insert(0, {
+        "QTR": st.session_state.game_state['quarter'],
+        "Time": format_clock(st.session_state.game_state['time_remaining']),
+        "Team": st.session_state.game_state[team_key]['name'],
+        "Player": f"#{player['num']} {player['name']}",
+        "Event": evt_desc
     })
-    
-    # Update Live Score
-    if team == st.session_state.match_data['team_a_name']:
-        st.session_state.match_data['score_a'] += points
-    elif team == st.session_state.match_data['team_b_name']:
-        st.session_state.match_data['score_b'] += points
 
-# --- 4. APP LAYOUT ---
+# --- 5. MAIN INTERFACE ---
 
-# Sidebar for Setup (Keeps main screen clean)
+# >>> SIDEBAR: SETUP & CONFIGURATION <<<
 with st.sidebar:
-    st.title("⚙️ Game Setup")
+    st.header("⚙️ Game Setup")
     
-    with st.expander("Team Configurations", expanded=True):
-        st.session_state.match_data['team_a_name'] = st.text_input("Home Team", st.session_state.match_data['team_a_name'])
-        st.session_state.match_data['team_b_name'] = st.text_input("Away Team", st.session_state.match_data['team_b_name'])
+    # Team Naming
+    st.session_state.game_state['team_a']['name'] = st.text_input("Home Team", st.session_state.game_state['team_a']['name']).upper()
+    st.session_state.game_state['team_b']['name'] = st.text_input("Away Team", st.session_state.game_state['team_b']['name']).upper()
     
-    with st.expander("Roster Management"):
-        st.write(f"**Add to {st.session_state.match_data['team_a_name']}**")
-        with st.form("a_roster"):
-            p_name = st.text_input("Name")
-            p_no = st.number_input("Jersey", 0, 99, key="a_no")
-            if st.form_submit_button("Add Home Player"):
-                st.session_state.match_data['team_a_roster'].append(f"#{p_no} {p_name}")
-
-        st.write(f"**Add to {st.session_state.match_data['team_b_name']}**")
-        with st.form("b_roster"):
-            p_name_b = st.text_input("Name")
-            p_no_b = st.number_input("Jersey", 0, 99, key="b_no")
-            if st.form_submit_button("Add Away Player"):
-                st.session_state.match_data['team_b_roster'].append(f"#{p_no_b} {p_name_b}")
-
-# --- MAIN DASHBOARD ---
-
-# Top Navigation
-nav = st.radio("", ["Match Console", "Analytics & Reports"], horizontal=True)
-
-if nav == "Match Console":
-    # --- SECTION A: THE SCOREBOARD ---
-    # This creates the visual impact of a real stadium board
-    
-    col_sb1, col_sb2, col_sb3 = st.columns([2, 3, 2])
-    
-    with col_sb1:
-        st.markdown(f"<div class='scoreboard-container'><div class='team-text'>{st.session_state.match_data['team_a_name']}</div><div class='score-text'>{st.session_state.match_data['score_a']}</div></div>", unsafe_allow_html=True)
-    
-    with col_sb2:
-        # Timer Logic
-        st.markdown(f"<div class='scoreboard-container'><div class='team-text'>GAME CLOCK</div><div class='timer-text'>{format_time(st.session_state.timer['time_left'])}</div></div>", unsafe_allow_html=True)
-        
-        # Timer Controls
-        t_c1, t_c2, t_c3 = st.columns(3)
-        with t_c1:
-            if st.button("▶ START"):
-                st.session_state.timer['running'] = True
-        with t_c2:
-            if st.button("⏸ PAUSE"):
-                st.session_state.timer['running'] = False
-        with t_c3:
-            if st.button("RESET QTR"):
-                st.session_state.timer['time_left'] = 600
-
-        # Auto-run timer logic if 'running' is True
-        if st.session_state.timer['running']:
-            time.sleep(1)
-            st.session_state.timer['time_left'] -= 1
-            st.rerun()
-
-    with col_sb3:
-        st.markdown(f"<div class='scoreboard-container'><div class='team-text'>{st.session_state.match_data['team_b_name']}</div><div class='score-text'>{st.session_state.match_data['score_b']}</div></div>", unsafe_allow_html=True)
-
     st.divider()
-
-    # --- SECTION B: COURT CONTROLS ---
     
-    # Context Settings
-    c_sett1, c_sett2, c_sett3, c_sett4 = st.columns(4)
-    with c_sett1:
-        quarter = st.selectbox("QUARTER", ["Q1", "Q2", "Q3", "Q4", "OT"])
-    with c_sett2:
-        match_id = st.text_input("MATCH ID", "GM-2024-001")
-    with c_sett3:
-        if st.button("TIMEOUT (Home)"):
-            log_event(quarter, st.session_state.match_data['team_a_name'], "TEAM", "TIMEOUT", 0)
-            st.toast("Timeout Recorded - Home")
-    with c_sett4:
-        if st.button("TIMEOUT (Away)"):
-            log_event(quarter, st.session_state.match_data['team_b_name'], "TEAM", "TIMEOUT", 0)
-            st.toast("Timeout Recorded - Away")
-
-    # The "5-Player" Active Selector
-    st.subheader("Active Lineup (On Court)")
+    # Quick Roster Builder
+    st.subheader("Roster Management")
+    target_team = st.radio("Select Team to Edit", ["Home", "Away"])
     
-    row_act1, row_act2 = st.columns(2)
-    with row_act1:
-        st.info(f"🏀 {st.session_state.match_data['team_a_name']} Lineup")
-        active_a = st.selectbox("Select Scorer/Fouler (Home)", st.session_state.match_data['team_a_roster'])
-        
-        # Big Buttons for Easy Clicking
-        btn_a1, btn_a2, btn_a3, btn_a4 = st.columns(4)
-        if btn_a1.button("+1 FT", key="a1"): log_event(quarter, st.session_state.match_data['team_a_name'], active_a, "Free Throw", 1)
-        if btn_a2.button("+2 PTS", key="a2"): log_event(quarter, st.session_state.match_data['team_a_name'], active_a, "Field Goal", 2)
-        if btn_a3.button("+3 PTS", key="a3"): log_event(quarter, st.session_state.match_data['team_a_name'], active_a, "3-Pointer", 3)
-        if btn_a4.button("FOUL", key="af"): log_event(quarter, st.session_state.match_data['team_a_name'], active_a, "Personal Foul", 0)
+    with st.form("add_player"):
+        p_name = st.text_input("Player Name")
+        p_num = st.number_input("Jersey #", 0, 99)
+        if st.form_submit_button("Add to Roster"):
+            t_key = 'roster_a' if target_team == "Home" else 'roster_b'
+            st.session_state.game_state[t_key].append({
+                'name': p_name, 
+                'num': p_num, 
+                'stats': {'pts': 0, 'fouls': 0}
+            })
+            st.success(f"Added #{p_num} {p_name}")
 
-    with row_act2:
-        st.error(f"🏀 {st.session_state.match_data['team_b_name']} Lineup")
-        active_b = st.selectbox("Select Scorer/Fouler (Away)", st.session_state.match_data['team_b_roster'])
-        
-        btn_b1, btn_b2, btn_b3, btn_b4 = st.columns(4)
-        if btn_b1.button("+1 FT", key="b1"): log_event(quarter, st.session_state.match_data['team_b_name'], active_b, "Free Throw", 1)
-        if btn_b2.button("+2 PTS", key="b2"): log_event(quarter, st.session_state.match_data['team_b_name'], active_b, "Field Goal", 2)
-        if btn_b3.button("+3 PTS", key="b3"): log_event(quarter, st.session_state.match_data['team_b_name'], active_b, "3-Pointer", 3)
-        if btn_b4.button("FOUL", key="bf"): log_event(quarter, st.session_state.match_data['team_b_name'], active_b, "Personal Foul", 0)
+# >>> MAIN AREA: SCOREBOARD <<<
+# Custom HTML Scoreboard
+col_sb1, col_sb2, col_sb3 = st.columns([2, 1.5, 2])
 
-elif nav == "Analytics & Reports":
-    st.title("📊 Post-Game Analysis")
+with col_sb1:
+    st.markdown(f"""
+        <div class="scoreboard">
+            <div class="team-name">{st.session_state.game_state['team_a']['name']}</div>
+            <div class="score-big">{st.session_state.game_state['team_a']['score']}</div>
+            <div style="color:red">FOULS: {st.session_state.game_state['team_a']['fouls']}</div>
+        </div>
+    """, unsafe_allow_html=True)
+
+with col_sb2:
+    st.markdown(f"""
+        <div class="scoreboard" style="border-color: #444;">
+            <div class="qtr-display">QTR {st.session_state.game_state['quarter']}</div>
+            <div class="timer-display">{format_clock(st.session_state.game_state['time_remaining'])}</div>
+            <div>MATCH 001</div>
+        </div>
+    """, unsafe_allow_html=True)
     
-    if st.session_state.match_data['match_log']:
-        df = pd.DataFrame(st.session_state.match_data['match_log'])
-        
-        # Top Level Metrics
-        m1, m2, m3 = st.columns(3)
-        m1.metric("Leading Scorer", df.groupby('Player')['Points'].sum().idxmax())
-        m2.metric("Total Fouls", len(df[df['Event'] == "Personal Foul"]))
-        m3.metric("Highest Scoring Qtr", df.groupby('Quarter')['Points'].sum().idxmax())
+    # Timer Controls
+    c1, c2 = st.columns(2)
+    if c1.button("Start/Stop"):
+        st.session_state.game_state['is_running'] = not st.session_state.game_state['is_running']
+    if c2.button("Nxt QTR"):
+        st.session_state.game_state['quarter'] += 1
+        st.session_state.game_state['time_remaining'] = 720
 
-        st.divider()
-        
-        # Quarter Flow Chart
-        st.subheader("Scoring Flow by Quarter")
-        qtr_chart = df.groupby(['Quarter', 'Team'])['Points'].sum().reset_index()
-        st.bar_chart(qtr_chart, x="Quarter", y="Points", color="Team", stack=False)
+with col_sb3:
+    st.markdown(f"""
+        <div class="scoreboard">
+            <div class="team-name">{st.session_state.game_state['team_b']['name']}</div>
+            <div class="score-big">{st.session_state.game_state['team_b']['score']}</div>
+            <div style="color:red">FOULS: {st.session_state.game_state['team_b']['fouls']}</div>
+        </div>
+    """, unsafe_allow_html=True)
 
-        # Detailed Box Score
-        st.subheader("Official Box Score")
-        box_score = df.groupby(['Team', 'Player']).agg({
-            'Points': 'sum',
-            'Event': 'count' # Simplified: counts total actions involved in
-        }).rename(columns={'Event': 'Actions Involved'}).reset_index()
+st.divider()
+
+# >>> ACTIVE FLOOR CONSOLE <<<
+
+# Selector for Starters (If less than 5 selected)
+r_a = st.session_state.game_state['roster_a']
+r_b = st.session_state.game_state['roster_b']
+
+if len(r_a) < 5 or len(r_b) < 5:
+    st.warning("⚠️ Please add at least 5 players to each roster in the Sidebar to unlock the court.")
+else:
+    # --- SUB MODE TOGGLE ---
+    sub_mode = st.checkbox("🔄 SUBSTITUTION MODE (Check this to swap players)")
+
+    col_court_a, col_court_b = st.columns(2)
+
+    # --- TEAM A COURT ---
+    with col_court_a:
+        st.subheader(f"🏀 {st.session_state.game_state['team_a']['name']} - ON COURT")
         
-        st.dataframe(box_score, use_container_width=True)
+        # If starters not set, allow selection
+        if len(st.session_state.game_state['on_court_a']) != 5:
+            st.info("Select Starting 5:")
+            # Create a list of names for multiselect
+            opts = [f"{p['name']} (#{p['num']})" for p in r_a]
+            sel = st.multiselect("Pick 5 Starters", range(len(r_a)), format_func=lambda x: f"{r_a[x]['name']} (#{r_a[x]['num']})", max_selections=5, key="start_a")
+            if len(sel) == 5:
+                if st.button("Confirm Starters A"):
+                    st.session_state.game_state['on_court_a'] = sel
+                    st.rerun()
+        else:
+            # RENDER ACTIVE PLAYERS
+            for i in st.session_state.game_state['on_court_a']:
+                player = r_a[i]
+                
+                # Check substitution
+                if sub_mode:
+                    sub_col1, sub_col2 = st.columns([3, 1])
+                    sub_col1.markdown(f"**#{player['num']} {player['name']}**")
+                    if sub_col2.button("SUB OUT", key=f"sub_a_{i}"):
+                         st.session_state.game_state['on_court_a'].remove(i)
+                         st.rerun()
+                else:
+                    # SCORING CONTROLS
+                    p_c1, p_c2, p_c3, p_c4, p_c5 = st.columns([2, 1, 1, 1, 1])
+                    p_c1.markdown(f"**#{player['num']} {player['name']}**")
+                    if p_c2.button("+1", key=f"ft_a_{i}"): record_stat('team_a', i, 'PTS', 1); st.rerun()
+                    if p_c3.button("+2", key=f"fg_a_{i}"): record_stat('team_a', i, 'PTS', 2); st.rerun()
+                    if p_c4.button("+3", key=f"3p_a_{i}"): record_stat('team_a', i, 'PTS', 3); st.rerun()
+                    if p_c5.button("FL", key=f"fl_a_{i}", type="primary"): record_stat('team_a', i, 'FOUL', 0); st.rerun()
+            
+            # If sub happened and we have < 5 players, show dropdown to add
+            if len(st.session_state.game_state['on_court_a']) < 5:
+                 avail_indices = [x for x in range(len(r_a)) if x not in st.session_state.game_state['on_court_a']]
+                 new_p = st.selectbox("Sub In:", avail_indices, format_func=lambda x: f"{r_a[x]['name']} (#{r_a[x]['num']})", key="new_sub_a")
+                 if st.button("Confirm Sub A"):
+                     st.session_state.game_state['on_court_a'].append(new_p)
+                     st.rerun()
+
+    # --- TEAM B COURT ---
+    with col_court_b:
+        st.subheader(f"🏀 {st.session_state.game_state['team_b']['name']} - ON COURT")
         
-        # CSV Download
-        csv = df.to_csv(index=False).encode('utf-8')
-        st.download_button("📥 Download Official Match Report (CSV)", data=csv, file_name="match_report.csv", mime="text/csv")
-        
-    else:
-        st.info("Match hasn't started. No data available.")
+        if len(st.session_state.game_state['on_court_b']) != 5:
+            st.info("Select Starting 5:")
+            opts_b = [f"{p['name']} (#{p['num']})" for p in r_b]
+            sel_b = st.multiselect("Pick 5 Starters", range(len(r_b)), format_func=lambda x: f"{r_b[x]['name']} (#{r_b[x]['num']})", max_selections=5, key="start_b")
+            if len(sel_b) == 5:
+                if st.button("Confirm Starters B"):
+                    st.session_state.game_state['on_court_b'] = sel_b
+                    st.rerun()
+        else:
+            for i in st.session_state.game_state['on_court_b']:
+                player = r_b[i]
+                
+                if sub_mode:
+                    sub_col1, sub_col2 = st.columns([3, 1])
+                    sub_col1.markdown(f"**#{player['num']} {player['name']}**")
+                    if sub_col2.button("SUB OUT", key=f"sub_b_{i}"):
+                         st.session_state.game_state['on_court_b'].remove(i)
+                         st.rerun()
+                else:
+                    p_c1, p_c2, p_c3, p_c4, p_c5 = st.columns([2, 1, 1, 1, 1])
+                    p_c1.markdown(f"**#{player['num']} {player['name']}**")
+                    if p_c2.button("+1", key=f"ft_b_{i}"): record_stat('team_b', i, 'PTS', 1); st.rerun()
+                    if p_c3.button("+2", key=f"fg_b_{i}"): record_stat('team_b', i, 'PTS', 2); st.rerun()
+                    if p_c4.button("+3", key=f"3p_b_{i}"): record_stat('team_b', i, 'PTS', 3); st.rerun()
+                    if p_c5.button("FL", key=f"fl_b_{i}", type="primary"): record_stat('team_b', i, 'FOUL', 0); st.rerun()
+            
+            if len(st.session_state.game_state['on_court_b']) < 5:
+                 avail_indices_b = [x for x in range(len(r_b)) if x not in st.session_state.game_state['on_court_b']]
+                 new_p_b = st.selectbox("Sub In:", avail_indices_b, format_func=lambda x: f"{r_b[x]['name']} (#{r_b[x]['num']})", key="new_sub_b")
+                 if st.button("Confirm Sub B"):
+                     st.session_state.game_state['on_court_b'].append(new_p_b)
+                     st.rerun()
+
+st.divider()
+
+# >>> LIVE PLAY-BY-PLAY FEED <<<
+st.subheader("📜 Live Play-by-Play")
+if st.session_state.game_state['logs']:
+    df_logs = pd.DataFrame(st.session_state.game_state['logs'])
+    st.dataframe(df_logs, use_container_width=True, hide_index=True)
+else:
+    st.caption("Waiting for tip-off...")
+
+# --- 6. REPORT GENERATION ---
+with st.expander("📊 Generate Official Box Score"):
+    if st.button("Generate Report"):
+        # Combine rosters and stats
+        report_data = []
+        for p in st.session_state.game_state['roster_a']:
+            report_data.append({'Team': st.session_state.game_state['team_a']['name'], 'Name': p['name'], 'PTS': p['stats']['pts'], 'PF': p['stats']['fouls']})
+        for p in st.session_state.game_state['roster_b']:
+            report_data.append({'Team': st.session_state.game_state['team_b']['name'], 'Name': p['name'], 'PTS': p['stats']['pts'], 'PF': p['stats']['fouls']})
+            
+        df_rep = pd.DataFrame(report_data)
+        st.table(df_rep)
