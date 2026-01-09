@@ -2,227 +2,314 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime
 
-# --- CONFIGURATION ---
-st.set_page_config(page_title="Court Command | Pro Scorer", page_icon="🏀", layout="wide")
+# --- 1. APP CONFIGURATION ---
+st.set_page_config(
+    page_title="FIBA LIVE STATS | CourtCommand",
+    page_icon="🏀",
+    layout="wide",
+    initial_sidebar_state="collapsed"
+)
 
-# --- CUSTOM CSS FOR "PRO" LOOK ---
-# This CSS tightens the buttons and makes the scoreboard look like an LED display
+# --- 2. ADVANCED CSS (THEMING) ---
+# This injects the "Professional" look: Sticky Header, Neon Buttons, Dark Theme
 st.markdown("""
     <style>
-    div.stButton > button {
-        padding: 0px 10px;
-        font-size: 12px;
-        height: 35px;
-        width: 100%;
-        border-radius: 4px;
+    /* IMPORT FONTS */
+    @import url('https://fonts.googleapis.com/css2?family=Roboto+Mono:wght@700&family=Oswald:wght@500&display=swap');
+
+    /* GENERAL APP THEME */
+    .stApp {
+        background-color: #0e1117; /* Dark Background */
+        color: #ffffff;
+    }
+
+    /* STICKY SCOREBOARD (JUMBOTRON) */
+    .sticky-header {
+        position: sticky;
+        top: 0;
+        z-index: 999;
+        background: linear-gradient(180deg, #1f2937 0%, #111827 100%);
+        padding: 15px 0px;
+        border-bottom: 3px solid #fca311; /* NBA Orange Accent */
+        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.5);
+        margin-bottom: 20px;
+    }
+    .score-text {
+        font-family: 'Oswald', sans-serif;
+        font-size: 50px;
+        font-weight: bold;
+        text-align: center;
+        margin: 0;
+        line-height: 1;
+    }
+    .team-name {
+        font-family: 'Roboto Mono', monospace;
+        font-size: 18px;
+        color: #9ca3af;
+        text-align: center;
+        text-transform: uppercase;
+        letter-spacing: 2px;
+    }
+    .period-indicator {
+        background-color: #374151;
+        color: #fca311;
+        padding: 5px 15px;
+        border-radius: 15px;
+        font-weight: bold;
+        text-align: center;
+        display: inline-block;
+    }
+
+    /* PLAYER ROWS styling */
+    .player-row {
+        background-color: #1f2937;
+        padding: 10px;
+        border-radius: 8px;
+        margin-bottom: 8px;
+        border-left: 5px solid #374151;
+        transition: all 0.2s;
+    }
+    .player-row:hover {
+        border-left: 5px solid #fca311;
+        background-color: #2d3748;
     }
     .player-name {
         font-size: 16px;
-        font-weight: bold;
-        padding-top: 8px;
+        font-weight: 600;
+        color: #e5e7eb;
+        padding-top: 5px;
     }
-    .score-display {
-        font-family: 'Courier New', monospace;
-        background-color: #000;
-        color: #0f0;
-        font-size: 40px;
+
+    /* CUSTOM BUTTON COLORING VIA CSS SELECTORS IS TRICKY IN STREAMLIT
+       SO WE USE LAYOUT AND EMOJIS TO CREATE VISUAL DISTINCTION */
+    
+    div.stButton > button {
+        width: 100%;
+        border-radius: 4px;
         font-weight: bold;
-        text-align: center;
-        padding: 10px;
-        border-radius: 5px;
-        margin-bottom: 10px;
+        border: none;
+        height: 40px;
     }
+    
+    /* HIDE STREAMLIT FOOTER */
+    footer {visibility: hidden;}
     </style>
 """, unsafe_allow_html=True)
 
-# --- INITIALIZATION ---
-if 'game_started' not in st.session_state:
-    st.session_state.game_started = False
+# --- 3. SESSION STATE INITIALIZATION ---
+if 'game_active' not in st.session_state:
+    st.session_state.game_active = False
 if 'game_log' not in st.session_state:
     st.session_state.game_log = []
 if 'teams' not in st.session_state:
-    st.session_state.teams = {"Home": "Warriors", "Away": "Lakers"}
+    st.session_state.teams = {"Home": "LAKERS", "Away": "CELTICS"}
+if 'period' not in st.session_state:
+    st.session_state.period = 1
+if 'home_fouls' not in st.session_state:
+    st.session_state.home_fouls = 0
+if 'away_fouls' not in st.session_state:
+    st.session_state.away_fouls = 0
 if 'roster' not in st.session_state:
-    # Structure: {'Home': [{'name': 'Curry', 'stats': {...}}, ...], 'Away': ...}
     st.session_state.roster = {"Home": [], "Away": []}
 
-# --- STATS ENGINE ---
-STATS_TEMPLATE = {
-    "PTS": 0, "FG": 0, "3PT": 0, "FT": 0,
-    "REB": 0, "AST": 0, "STL": 0, "BLK": 0, 
-    "TO": 0, "PF": 0
-}
+# Define Stats Structure (NBA Standard)
+STATS_KEYS = ["PTS", "FGM", "3PM", "FTM", "OREB", "DREB", "AST", "STL", "BLK", "TOV", "PF"]
 
-def update_stat(team, player_idx, stat_type, points=0):
-    # 1. Update Player Stats
-    player = st.session_state.roster[team][player_idx]
+def init_player(name):
+    p = {k: 0 for k in STATS_KEYS}
+    p['name'] = name
+    return p
+
+# --- 4. LOGIC ENGINE ---
+
+def log_event(team_key, player_idx, stat, points=0, is_foul=False):
+    # Update Stats
+    player = st.session_state.roster[team_key][player_idx]
+    player[stat] += 1
     
-    if stat_type in ["FG", "3PT", "FT"]:
-        player['stats'][stat_type] += 1
-        player['stats']['PTS'] += points
-    else:
-        player['stats'][stat_type] += 1
-        
-    # 2. Log Event
-    timestamp = datetime.now().strftime("%H:%M:%S")
-    event_desc = f"{stat_type} ({points}pts)" if points > 0 else stat_type
+    if points > 0:
+        player["PTS"] += points
+    
+    # Update Team Fouls
+    if is_foul:
+        if team_key == "Home": st.session_state.home_fouls += 1
+        else: st.session_state.away_fouls += 1
+
+    # Create Log
+    team_name = st.session_state.teams[team_key]
+    time_stamp = datetime.now().strftime("%H:%M:%S")
+    score_str = f"{get_score('Home')} - {get_score('Away')}"
     
     log_entry = {
-        "Time": timestamp,
-        "Team": st.session_state.teams[team],
+        "Q": st.session_state.period,
+        "Time": time_stamp,
+        "Team": team_name,
         "Player": player['name'],
-        "Event": event_desc,
-        "Score": get_score_string()
+        "Action": stat,
+        "Score": score_str
     }
     st.session_state.game_log.insert(0, log_entry)
-    st.toast(f"{player['name']} - {event_desc}")
-
-def get_team_score(team_key):
-    total = 0
-    for p in st.session_state.roster[team_key]:
-        total += p['stats']['PTS']
-    return total
-
-def get_score_string():
-    h = get_team_score("Home")
-    a = get_team_score("Away")
-    return f"{h} - {a}"
-
-# --- PAGE 1: SETUP ---
-def render_setup():
-    st.title("📋 Game Setup")
     
-    c1, c2 = st.columns(2)
-    with c1:
-        st.subheader("Home Team")
-        home_name = st.text_input("Home Team Name", "Home Team")
-        # Text area for bulk entry
-        home_roster_input = st.text_area("Home Roster (One name per line)", "Player 1\nPlayer 2\nPlayer 3\nPlayer 4\nPlayer 5")
-    
-    with c2:
-        st.subheader("Away Team")
-        away_name = st.text_input("Away Team Name", "Away Team")
-        away_roster_input = st.text_area("Away Roster (One name per line)", "Opponent A\nOpponent B\nOpponent C\nOpponent D\nOpponent E")
+    # "Living App" Feedback
+    st.toast(f"✅ {player['name']} | {stat} Recorded!", icon="🏀")
 
-    if st.button("🚀 Lock In Rosters & Start Game", type="primary"):
-        # Process Rosters
-        st.session_state.teams["Home"] = home_name
-        st.session_state.teams["Away"] = away_name
+def get_score(team_key):
+    return sum(p['PTS'] for p in st.session_state.roster[team_key])
+
+def reset_period():
+    st.session_state.period += 1
+    st.session_state.home_fouls = 0
+    st.session_state.away_fouls = 0
+    st.toast(f"Period {st.session_state.period} Started. Team Fouls Reset.", icon="⏱️")
+
+# --- 5. UI COMPONENTS ---
+
+def render_scoreboard():
+    h_score = get_score("Home")
+    a_score = get_score("Away")
+    h_name = st.session_state.teams["Home"]
+    a_name = st.session_state.teams["Away"]
+    
+    # The Sticky Header
+    st.markdown(f"""
+        <div class="sticky-header">
+            <div style="display: flex; justify-content: space-around; align-items: center;">
+                <div style="text-align: center; width: 30%;">
+                    <div class="team-name">{h_name}</div>
+                    <div class="score-text" style="color: #4ade80;">{h_score}</div>
+                    <div style="font-size: 12px; color: #ef4444;">FOULS: {st.session_state.home_fouls}</div>
+                </div>
+                <div style="text-align: center; width: 20%;">
+                     <div class="period-indicator">Q{st.session_state.period}</div>
+                </div>
+                <div style="text-align: center; width: 30%;">
+                    <div class="team-name">{a_name}</div>
+                    <div class="score-text" style="color: #60a5fa;">{a_score}</div>
+                    <div style="font-size: 12px; color: #ef4444;">FOULS: {st.session_state.away_fouls}</div>
+                </div>
+            </div>
+        </div>
+    """, unsafe_allow_html=True)
+
+def render_player_grid(team_key):
+    roster = st.session_state.roster[team_key]
+    
+    # Column Headers
+    st.markdown(f"### {st.session_state.teams[team_key]} Roster")
+    h1, h2, h3, h4, h5, h6, h7, h8, h9 = st.columns([2.5, 1, 1, 1, 1, 1, 1, 1, 1])
+    h1.caption("PLAYER")
+    h2.caption("PTS") # +1
+    h3.caption("FG")  # +2
+    h4.caption("3PT") # +3
+    h5.caption("REB")
+    h6.caption("AST")
+    h7.caption("STL")
+    h8.caption("TOV")
+    h9.caption("PF")
+
+    for i, p in enumerate(roster):
+        uid = f"{team_key}_{i}"
         
-        # Parse text area into list
-        h_list = [x.strip() for x in home_roster_input.split('\n') if x.strip()]
-        a_list = [x.strip() for x in away_roster_input.split('\n') if x.strip()]
+        # We use a container to apply the CSS style
+        with st.container():
+            c1, c2, c3, c4, c5, c6, c7, c8, c9 = st.columns([2.5, 1, 1, 1, 1, 1, 1, 1, 1])
+            
+            c1.markdown(f"<div class='player-name'>{p['name']} <span style='color:grey; font-size:10px'>({p['PTS']}pts)</span></div>", unsafe_allow_html=True)
+            
+            # SCORING (Green/Primary)
+            if c2.button("FT", key=f"{uid}_ft", help="+1 Point"): log_event(team_key, i, "FTM", 1)
+            if c3.button("2P", key=f"{uid}_2p", help="+2 Points"): log_event(team_key, i, "FGM", 2)
+            if c4.button("3P", key=f"{uid}_3p", help="+3 Points"): log_event(team_key, i, "3PM", 3)
+            
+            # POSITIVE STATS (Secondary)
+            if c5.button("REB", key=f"{uid}_rb"): log_event(team_key, i, "DREB") # Simplified to generic Reb
+            if c6.button("AST", key=f"{uid}_as"): log_event(team_key, i, "AST")
+            if c7.button("STL", key=f"{uid}_st"): log_event(team_key, i, "STL")
+            
+            # NEGATIVE STATS (Danger)
+            if c8.button("TO", key=f"{uid}_to"): log_event(team_key, i, "TOV")
+            if c9.button("PF", key=f"{uid}_pf"): log_event(team_key, i, "PF", is_foul=True)
         
-        # Initialize Player Objects
-        st.session_state.roster["Home"] = [{'name': name, 'stats': STATS_TEMPLATE.copy()} for name in h_list]
-        st.session_state.roster["Away"] = [{'name': name, 'stats': STATS_TEMPLATE.copy()} for name in a_list]
+        st.markdown("<div style='margin-bottom: 5px'></div>", unsafe_allow_html=True) # Spacer
+
+# --- 6. SETUP PAGE ---
+def setup_screen():
+    st.title("🏀 COURT COMMAND PRO Setup")
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown("### HOME TEAM")
+        h_team = st.text_input("Home Name", "Lakers")
+        h_text = st.text_area("Home Roster (Paste Names)", "LeBron James\nAnthony Davis\nAustin Reaves")
+    
+    with col2:
+        st.markdown("### AWAY TEAM")
+        a_team = st.text_input("Away Name", "Celtics")
+        a_text = st.text_area("Away Roster (Paste Names)", "Jayson Tatum\nJaylen Brown\nJrue Holiday")
+
+    if st.button("INITIALIZE GAME SYSTEM", type="primary", use_container_width=True):
+        st.session_state.teams["Home"] = h_team
+        st.session_state.teams["Away"] = a_team
         
-        st.session_state.game_started = True
+        # Process Lists
+        h_list = [x.strip() for x in h_text.split('\n') if x.strip()]
+        a_list = [x.strip() for x in a_text.split('\n') if x.strip()]
+        
+        st.session_state.roster["Home"] = [init_player(n) for n in h_list]
+        st.session_state.roster["Away"] = [init_player(n) for n in a_list]
+        
+        st.session_state.game_active = True
         st.rerun()
 
-# --- PAGE 2: LIVE GAME ---
-def render_game():
-    # --- SCOREBOARD HEADER ---
-    h_score = get_team_score("Home")
-    a_score = get_team_score("Away")
+# --- 7. MAIN GAME SCREEN ---
+def game_screen():
+    render_scoreboard()
     
-    sc1, sc2, sc3 = st.columns([2,1,2])
-    with sc1:
-        st.markdown(f"<h3 style='text-align:center'>{st.session_state.teams['Home']}</h3>", unsafe_allow_html=True)
-        st.markdown(f"<div class='score-display'>{h_score}</div>", unsafe_allow_html=True)
-    with sc2:
-        st.markdown("<h4 style='text-align:center; padding-top:20px'>VS</h4>", unsafe_allow_html=True)
-    with sc3:
-        st.markdown(f"<h3 style='text-align:center'>{st.session_state.teams['Away']}</h3>", unsafe_allow_html=True)
-        st.markdown(f"<div class='score-display'>{a_score}</div>", unsafe_allow_html=True)
+    tab1, tab2, tab3, tab4 = st.tabs(["🏠 HOME ENTRY", "✈️ AWAY ENTRY", "📊 LIVE BOX SCORE", "⚙️ ADMIN"])
     
-    st.divider()
-
-    # --- MAIN CONTROLS (TABS) ---
-    tab_home, tab_away, tab_box, tab_log = st.tabs([
-        f"🏠 {st.session_state.teams['Home']} Controls", 
-        f"✈️ {st.session_state.teams['Away']} Controls", 
-        "📊 Live Box Score",
-        "📝 Play-by-Play"
-    ])
+    with tab1:
+        render_player_grid("Home")
     
-    # HELPER TO RENDER PLAYER ROWS
-    def render_player_rows(team_key):
-        # Header Row
-        h1, h2, h3, h4, h5, h6, h7, h8, h9 = st.columns([2, 1, 1, 1, 1, 1, 1, 1, 1])
-        h1.markdown("**Player**")
-        h2.markdown("**+1**")
-        h3.markdown("**+2**")
-        h4.markdown("**+3**")
-        h5.markdown("**REB**")
-        h6.markdown("**AST**")
-        h7.markdown("**STL**")
-        h8.markdown("**BLK**")
-        h9.markdown("**PF**") # Personal Foul
+    with tab2:
+        render_player_grid("Away")
         
-        # Player Rows
-        for idx, player in enumerate(st.session_state.roster[team_key]):
-            c1, c2, c3, c4, c5, c6, c7, c8, c9 = st.columns([2, 1, 1, 1, 1, 1, 1, 1, 1])
-            
-            with c1: st.markdown(f"<div class='player-name'>{player['name']}</div>", unsafe_allow_html=True)
-            
-            # Action Buttons - using unique keys for every single button
-            uid = f"{team_key}_{idx}"
-            if c2.button("FT", key=f"{uid}_ft"): update_stat(team_key, idx, "FT", 1)
-            if c3.button("2P", key=f"{uid}_2p"): update_stat(team_key, idx, "FG", 2)
-            if c4.button("3P", key=f"{uid}_3p"): update_stat(team_key, idx, "3PT", 3)
-            if c5.button("RB", key=f"{uid}_reb"): update_stat(team_key, idx, "REB")
-            if c6.button("AS", key=f"{uid}_ast"): update_stat(team_key, idx, "AST")
-            if c7.button("ST", key=f"{uid}_stl"): update_stat(team_key, idx, "STL")
-            if c8.button("BL", key=f"{uid}_blk"): update_stat(team_key, idx, "BLK")
-            if c9.button("PF", key=f"{uid}_pf"): update_stat(team_key, idx, "PF")
-            
-            # Optional: Add TO (Turnover) in a separate line or dropdown if needed, but this covers 90%
-            
-    with tab_home:
-        render_player_rows("Home")
+    with tab3:
+        st.markdown("### 📊 Live Box Score")
+        # Flatten Data
+        all_players = []
+        for t in ["Home", "Away"]:
+            for p in st.session_state.roster[t]:
+                row = p.copy()
+                row["Team"] = st.session_state.teams[t]
+                all_players.append(row)
         
-    with tab_away:
-        render_player_rows("Away")
+        if all_players:
+            df = pd.DataFrame(all_players)
+            # Reorder
+            cols = ["Team", "name", "PTS", "FGM", "3PM", "FTM", "AST", "DREB", "STL", "BLK", "TOV", "PF"]
+            st.dataframe(
+                df[cols].style.background_gradient(cmap="Greens", subset=["PTS"]), 
+                use_container_width=True, 
+                height=600
+            )
+    
+    with tab4:
+        st.markdown("### Game Administration")
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            if st.button("End Quarter / Period", use_container_width=True):
+                reset_period()
+        with c2:
+            if st.button("📥 Download CSV Report", use_container_width=True):
+                df_log = pd.DataFrame(st.session_state.game_log)
+                st.download_button("Click to Download", df_log.to_csv(), "game_report.csv")
+        with c3:
+             if st.button("⚠️ RESET MATCH", type="primary", use_container_width=True):
+                for key in st.session_state.keys(): del st.session_state[key]
+                st.rerun()
 
-    with tab_box:
-        st.subheader("Combined Box Score")
-        # Flatten data for DataFrame
-        box_data = []
-        for team in ["Home", "Away"]:
-            team_name = st.session_state.teams[team]
-            for p in st.session_state.roster[team]:
-                row = p['stats'].copy()
-                row['Player'] = p['name']
-                row['Team'] = team_name
-                box_data.append(row)
-        
-        if box_data:
-            df = pd.DataFrame(box_data)
-            # Reorder columns
-            cols = ['Team', 'Player', 'PTS', 'REB', 'AST', 'STL', 'BLK', 'PF', 'FG', '3PT', 'FT']
-            st.dataframe(df[cols], use_container_width=True, height=500)
-            
-            # CSV Download
-            csv = df.to_csv(index=False).encode('utf-8')
-            st.download_button("📥 Download Box Score CSV", csv, "box_score.csv", "text/csv")
-            
-    with tab_log:
-        if st.session_state.game_log:
-            st.dataframe(pd.DataFrame(st.session_state.game_log), use_container_width=True)
-        else:
-            st.info("Game hasn't started yet.")
-
-    # Sidebar Reset
-    with st.sidebar:
-        st.warning("⚠️ Danger Zone")
-        if st.button("End Game / Reset"):
-            for key in st.session_state.keys():
-                del st.session_state[key]
-            st.rerun()
-
-# --- MAIN ROUTER ---
-if st.session_state.game_started:
-    render_game()
+# --- APP ROUTER ---
+if st.session_state.game_active:
+    game_screen()
 else:
-    render_setup()
+    setup_screen()
